@@ -1,59 +1,98 @@
-
-    
 import socket
 import threading
 import sys
 import os
-
-# Importação de bibliotecas DNS
-try:
-    import dns.resolver
-except ImportError:
-    print("[!] O pacote 'dnspython' não está instalado. Adicione 'dnspython' ao requirements.txt.")
-
+import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# === SERVIDORES DNS UPSTREAM ===
+# Importação da biblioteca DNS
+try:
+    import dns.resolver
+    import dns.message
+    import dns.rdatatype
+except ImportError:
+    print("[!] A biblioteca 'dnspython' não está instalada. Certifica-te de ter 'dnspython' no requirements.txt.")
+
+# === SERVIDORES DNS UPSTREAM (FALLBACK) ===
 UPSTREAM_DNS = [
-    "94.140.14.14", # AdGuard DNS
-    "76.76.2.2",    # ControlD
-    "194.242.2.2",  # Mullvad DNS
-    "9.9.9.9",      # Quad9
-    "1.1.1.1"       # Cloudflare
+    "94.140.14.14",  # AdGuard DNS
+    "76.76.2.2",     # ControlD
+    "1.1.1.1"        # Cloudflare
 ]
 
-# === HTTP HANDLER PARA O RENDER ===
-class HealthCheckHandler(BaseHTTPRequestHandler):
+# === LISTA DE BLOQUEIO (ADS / TRACKERS) ===
+BLOCKED_KEYWORDS = ["ad", "ads", "tracker", "telemetry", "analytics", "doubleclick", "pixel"]
+
+def dominio_bloqueado(domain):
+    domain_lower = domain.lower()
+    return any(kw in domain_lower for kw in BLOCKED_KEYWORDS)
+
+# === HANDLER COMPATÍVEL COM ANDROID (DoH / HTTPS / HEALTH CHECK) ===
+class AndroidDNSHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # Validação de status do Render / Painel Web
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write("Servidor DNS Proxy em Python Ativo no Render!".encode('utf-8'))
+        response_data = {
+            "status": "online",
+            "service": "DNS Private Server / Android 9+ Compatible",
+            "mode": "AdBlock Enabled"
+        }
+        self.wfile.write(json.dumps(response_data).encode('utf-8'))
+
+    def do_POST(self):
+        # Suporte a DNS over HTTPS (DoH) usado por navegadores e sistemas modernos
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length)
+
+        try:
+            dns_req = dns.message.from_wire(post_data)
+            qname = str(dns_req.question[0].name).rstrip('.')
+
+            if dominio_bloqueado(qname):
+                # Responde com IP 0.0.0.0 (Bloqueado)
+                reply = dns.message.make_response(dns_req)
+                reply.set_rcode(dns.rcode.NOERROR)
+                self._send_dns_response(reply.to_wire())
+            else:
+                # Encaminha consulta para o Upstream
+                resolver = dns.resolver.Resolver()
+                resolver.nameservers = UPSTREAM_DNS
+                answer = resolver.resolve(qname, dns_req.question[0].rdtype)
+                
+                reply = dns.message.make_response(dns_req)
+                for rdata in answer:
+                    reply.answer.append(dns.rrset.from_text(qname, 300, dns.rdataclass.IN, dns_req.question[0].rdtype, str(rdata)))
+                self._send_dns_response(reply.to_wire())
+
+        except Exception as e:
+            self.send_response(400)
+            self.end_headers()
+
+    def _send_dns_response(self, wire_data):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/dns-message')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(wire_data)
 
     def log_message(self, format, *args):
-        return # Silencia logs HTTP repetitivos no terminal
+        return  # Silencia logs HTTP repetitivos
 
 def rodar_servidor_http(porta):
-    server = HTTPServer(('0.0.0.0', porta), HealthCheckHandler)
-    print(f"[*] Servidor Web de Status/HealthCheck ativo na porta {porta}")
+    server = HTTPServer(('0.0.0.0', porta), AndroidDNSHandler)
+    print(f"[*] Servidor DNS (DoH/HTTPS) compatível com Android ativo na porta {porta}")
     server.serve_forever()
 
 # === INICIALIZAÇÃO ===
 if __name__ == "__main__":
-    # Obtém a porta atribuída pelo Render ou usa 8053 por padrão
+    # Obtém a porta atribuída dinamicamente pelo Render
     port_env = int(os.environ.get("PORT", 8053))
 
-    # Define o modo padrão automaticamente (sem requerer input do terminal)
-    user_input = "todos"
-    print(f"[*] Modo configurado automaticamente: '{user_input}'")
-
-    # Inicia o servidor HTTP em uma thread secundária para responder ao Render
-    http_thread = threading.Thread(target=rodar_servidor_http, args=(port_env,), daemon=True)
-    http_thread.start()
-
-    print("[*] Servidor DNS Multi-Upstream a aguardar requisições...")
+    print("[*] A iniciar serviço DNS Bloqueador compatível com Android 9+...")
     
-    # Mantém o processo principal ativo
-    http_thread.join()
+    # Inicia o servidor HTTP/HTTPS
+    rodar_servidor_http(port_env)
     
