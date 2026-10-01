@@ -1,3 +1,5 @@
+
+    
 import socket
 import threading
 import sys
@@ -37,26 +39,14 @@ def rodar_servidor_http(porta):
     print(f"[*] Servidor Web de Status/HealthCheck ativo na porta {porta}")
     server.serve_forever()
 
-# === LÓGICA DE TRATAMENTO DE INPUT (RESOLVE O EOFERROR NO RENDER) ===
-def obter_escolha_usuario():
-    try:
-        # Tenta ler do terminal (quando rodar localmente no Termux)
-        print("Opções de inicialização disponíveis: (todos / IP / Enter)")
-        escolha = input("Escolha (todos / IP / Enter): ").strip().lower()
-        return escolha
-    except (EOFError, KeyboardInterrupt):
-        # Captura a falha do Render (sem terminal interativo) e assume o modo padrão
-        print("[*] Ambiente sem terminal detectado (Render/Nuvem). Selecionando modo padrão automaticamente.")
-        return "todos"
-
 # === INICIALIZAÇÃO ===
 if __name__ == "__main__":
     # Obtém a porta atribuída pelo Render ou usa 8053 por padrão
     port_env = int(os.environ.get("PORT", 8053))
 
-    # Obtém a escolha sem travar a execução no Render
-    user_input = obter_escolha_usuario()
-    print(f"[*] Modo configurado: '{user_input}'")
+    # Define o modo padrão automaticamente (sem requerer input do terminal)
+    user_input = "todos"
+    print(f"[*] Modo configurado automaticamente: '{user_input}'")
 
     # Inicia o servidor HTTP em uma thread secundária para responder ao Render
     http_thread = threading.Thread(target=rodar_servidor_http, args=(port_env,), daemon=True)
