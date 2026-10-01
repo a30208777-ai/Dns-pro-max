@@ -1,9 +1,9 @@
 // === 1. CONFIGURAÇÃO ===
 const CONFIG = {
-    // Substitua o link abaixo pela URL gerada no seu painel do Render:
-    LOCAL_SERVER: "https://meu-servidor-dns.onrender.com",
+    // URL do teu servidor Python alojado no Render:
+    LOCAL_SERVER: "https://dns-pro-max.onrender.com",
     
-    // Lista de servidores DNS upstream para monitoramento
+    // Lista de servidores DNS upstream para monitorização
     DNS_LIST: [
         { name: "AdGuard DNS", ip: "94.140.14.14", type: "AdBlock" },
         { name: "ControlD", ip: "76.76.2.2", type: "AdBlock" },
@@ -62,7 +62,7 @@ function testarDominio(domain) {
 
 // === 4. GERADOR DE CONFIGURAÇÃO DE DISPOSITIVOS ===
 function gerarInstrucoes(os, serverUrl) {
-    const cleanHost = serverUrl.replace(/^https?:\/\//, "").split(":")[0];
+    const cleanHost = serverUrl.replace(/^https?:\/\//, "").replace(/\/$/, "").split(":")[0];
     const selected = (os || "").toLowerCase().trim();
 
     const configs = {
@@ -158,4 +158,3 @@ document.addEventListener("DOMContentLoaded", () => {
         if (blockEl) blockEl.textContent = blockedAds;
     }, 2500);
 });
-                                                         
