@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel DNS Multi-Upstream</title>
+    <style>
+        :root[data-theme="dark"] {
+            --bg: #0d1117;
+            --card: #161b22;
+            --text: #c9d1d9;
+            --border: #30363d;
+            --accent: #58a6ff;
+            --success: #3fb950;
+            --danger: #f85149;
+        }
+
+        :root[data-theme="light"] {
+            --bg: #f6f8fa;
+            --card: #ffffff;
+            --text: #24292f;
+            --border: #d0d7de;
+            --accent: #0969da;
+            --success: #1a7f37;
+            --danger: #cf222e;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .container {
+            max-width: 650px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .header h2 {
+            margin: 0;
+            font-size: 1.4rem;
+        }
+
+        .card {
+            background-color: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 18px;
+            margin-bottom: 18px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .card h3 {
+            margin-top: 0;
+            margin-bottom: 14px;
+            font-size: 1.1rem;
+        }
+
+        .stats-grid {
+            display: flex;
+            gap: 12px;
+        }
+
+        .stat-box {
+            flex: 1;
+            background-color: var(--bg);
+            padding: 12px;
+            border-radius: 6px;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .stat-number {
+            font-size: 1.6rem;
+            font-weight: bold;
+            color: var(--accent);
+        }
+
+        .dns-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .dns-item:last-child {
+            border-bottom: none;
+        }
+
+        .dns-info strong {
+            display: block;
+        }
+
+        .dns-info small {
+            opacity: 0.7;
+        }
+
+        .status-badge, .server-badge {
+            font-size: 0.85rem;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background-color: var(--bg);
+            border: 1px solid var(--border);
+        }
+
+        .server-badge.online, .status-badge.online {
+            color: var(--success);
+            border-color: var(--success);
+        }
+
+        .server-badge.offline {
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+
+        .btn {
+            background-color: var(--accent);
+            color: #ffffff;
+            border: none;
+            padding: 10px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+
+        .btn:hover {
+            opacity: 0.9;
+        }
+
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            margin-top: 8px;
+            background-color: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        .result-blocked {
+            color: var(--danger);
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        .result-allowed {
+            color: var(--success);
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- Cabeçalho -->
+        <div class="header">
+            <h2>🛡️ Painel DNS Multi-Upstream</h2>
+            <button id="theme-toggle" class="btn">☀️ Modo Claro</button>
+        </div>
+
+        <!-- Estatísticas da Sessão -->
+        <div class="card">
+            <h3>Estatísticas da Rede</h3>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div id="stat-total-req" class="stat-number">0</div>
+                    <small>Consultas Processadas</small>
+                </div>
+                <div class="stat-box">
+                    <div id="stat-blocked-ads" class="stat-number">0</div>
+                    <small>Anúncios Bloqueados</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status do Servidor Termux -->
+        <div class="card">
+            <h3>Status do Servidor Local</h3>
+            <span id="server-status" class="server-badge">Verificando...</span>
+        </div>
+
+        <!-- Lista de Servidores DNS Upstream -->
+        <div class="card">
+            <h3>Servidores DNS Upstream</h3>
+            <div id="dns-container"></div>
+        </div>
+
+        <!-- Testador de Filtro de Domínio -->
+        <div class="card">
+            <h3>Simular Filtro de Domínio</h3>
+            <input type="text" id="input-domain" placeholder="Ex: ads.google.com ou github.com">
+            <button id="btn-simulate" class="btn" style="margin-top: 10px; width: 100%;">Testar Bloqueio</button>
+            <div id="sim-result"></div>
+        </div>
+
+        <!-- Gerador de Instruções de Configuração -->
+        <div class="card">
+            <h3>Gerador de Configuração</h3>
+            <select id="select-os">
+                <option value="">Selecione o seu Sistema Operacional</option>
+                <option value="android">Android</option>
+                <option value="windows">Windows</option>
+                <option value="linux">Linux / Termux</option>
+            </select>
+            <textarea id="config-output" rows="5" readonly placeholder="Escolha um sistema acima para gerar as instruções..." style="margin-top: 10px;"></textarea>
+        </div>
+    </div>
+
+  
+    <script src="app.js"></script>
+
+</body>
+              </html>
+              
