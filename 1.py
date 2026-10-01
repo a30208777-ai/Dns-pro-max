@@ -1,98 +1,107 @@
 import socket
-import threading
 import sys
+import threading
 import os
-import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Importação da biblioteca DNS
 try:
+    from dnslib import DNSRecord, DNSHeader, RR, A, AAAA, QTYPE
     import dns.resolver
-    import dns.message
-    import dns.rdatatype
 except ImportError:
-    print("[!] A biblioteca 'dnspython' não está instalada. Certifica-te de ter 'dnspython' no requirements.txt.")
+    print("[!] Instale as dependências executando: pip install dnslib dnspython")
+    sys.exit(1)
 
-# === SERVIDORES DNS UPSTREAM (FALLBACK) ===
-UPSTREAM_DNS = [
-    "94.140.14.14",  # AdGuard DNS
-    "76.76.2.2",     # ControlD
-    "1.1.1.1"        # Cloudflare
-]
+# === CONFIGURAÇÕES DO SERVIDOR DNS REAL ===
+HOST = '0.0.0.0'
+PORT = int(os.environ.get("PORT", 53))  # Usa a porta 53 por padrão para DNS real
+UPSTREAM_SERVERS = ["1.1.1.1", "9.9.9.9", "94.140.14.14"]
 
-# === LISTA DE BLOQUEIO (ADS / TRACKERS) ===
+# Lista de palavras-chave para bloqueio direto no DNS
 BLOCKED_KEYWORDS = ["ad", "ads", "tracker", "telemetry", "analytics", "doubleclick", "pixel"]
 
-def dominio_bloqueado(domain):
-    domain_lower = domain.lower()
-    return any(kw in domain_lower for kw in BLOCKED_KEYWORDS)
+def e_dominio_bloqueado(domain_str):
+    clean_domain = domain_str.rstrip('.').lower()
+    return any(kw in clean_domain for kw in BLOCKED_KEYWORDS)
 
-# === HANDLER COMPATÍVEL COM ANDROID (DoH / HTTPS / HEALTH CHECK) ===
-class AndroidDNSHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        # Validação de status do Render / Painel Web
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        response_data = {
-            "status": "online",
-            "service": "DNS Private Server / Android 9+ Compatible",
-            "mode": "AdBlock Enabled"
-        }
-        self.wfile.write(json.dumps(response_data).encode('utf-8'))
+def processar_pacote_dns(raw_data):
+    """
+    Processa a requisição DNS binária e gera um pacote DNS binário real de resposta.
+    """
+    try:
+        request = DNSRecord.parse(raw_data)
+        qname = str(request.q.qname).rstrip('.')
+        qtype_num = request.q.qtype
+        qtype_str = QTYPE[qtype_num]
 
-    def do_POST(self):
-        # Suporte a DNS over HTTPS (DoH) usado por navegadores e sistemas modernos
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length)
+        # Cria a estrutura de cabeçalho da resposta
+        reply = DNSRecord(
+            DNSHeader(id=request.header.id, qr=1, aa=1, ra=1),
+            q=request.q
+        )
+
+        # 1. BLOQUEIO REAL: Retorna IP NULL (0.0.0.0) se o domínio for anúncio
+        if e_dominio_bloqueado(qname):
+            print(f"[BLOQUEADO] -> {qname}")
+            if qtype_str == 'A':
+                reply.add_answer(RR(qname, QTYPE.A, rdata=A("0.0.0.0"), ttl=60))
+            return reply.pack()
+
+        # 2. RESOLUÇÃO REAL: Consulta servidores DNS upstream oficiais
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = UPSTREAM_SERVERS
+        resolver.timeout = 2
+        resolver.lifetime = 2
 
         try:
-            dns_req = dns.message.from_wire(post_data)
-            qname = str(dns_req.question[0].name).rstrip('.')
-
-            if dominio_bloqueado(qname):
-                # Responde com IP 0.0.0.0 (Bloqueado)
-                reply = dns.message.make_response(dns_req)
-                reply.set_rcode(dns.rcode.NOERROR)
-                self._send_dns_response(reply.to_wire())
-            else:
-                # Encaminha consulta para o Upstream
-                resolver = dns.resolver.Resolver()
-                resolver.nameservers = UPSTREAM_DNS
-                answer = resolver.resolve(qname, dns_req.question[0].rdtype)
-                
-                reply = dns.message.make_response(dns_req)
-                for rdata in answer:
-                    reply.answer.append(dns.rrset.from_text(qname, 300, dns.rdataclass.IN, dns_req.question[0].rdtype, str(rdata)))
-                self._send_dns_response(reply.to_wire())
-
+            answers = resolver.resolve(qname, qtype_str)
+            for rdata in answers:
+                if qtype_str == 'A':
+                    reply.add_answer(RR(qname, QTYPE.A, rdata=A(str(rdata)), ttl=300))
+                elif qtype_str == 'AAAA':
+                    reply.add_answer(RR(qname, QTYPE.AAAA, rdata=AAAA(str(rdata)), ttl=300))
+            print(f"[RESOLVIDO] -> {qname} ({qtype_str})")
         except Exception as e:
-            self.send_response(400)
-            self.end_headers()
+            # Em caso de erro na consulta, retorna a resposta sem registros
+            pass
 
-    def _send_dns_response(self, wire_data):
-        self.send_response(200)
-        self.send_header('Content-Type', 'application/dns-message')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        self.wfile.write(wire_data)
+        return reply.pack()
 
-    def log_message(self, format, *args):
-        return  # Silencia logs HTTP repetitivos
+    except Exception as err:
+        print(f"[ERRO PACOTE] Falha ao processar bytes: {err}")
+        return None
 
-def rodar_servidor_http(porta):
-    server = HTTPServer(('0.0.0.0', porta), AndroidDNSHandler)
-    print(f"[*] Servidor DNS (DoH/HTTPS) compatível com Android ativo na porta {porta}")
-    server.serve_forever()
+def escutar_udp(sock):
+    """
+    Escuta requisições DNS padrão via UDP/53.
+    """
+    while True:
+        try:
+            data, addr = sock.recvfrom(4096)
+            if data:
+                # Trata cada requisição em uma thread separada para alta performance
+                threading.Thread(target=tratar_cliente_udp, args=(sock, data, addr), daemon=True).start()
+        except Exception as e:
+            print(f"[ERRO UDP] {e}")
+            break
 
-# === INICIALIZAÇÃO ===
+def tratar_cliente_udp(sock, data, addr):
+    resposta_binaria = processar_pacote_dns(data)
+    if resposta_binaria:
+        sock.sendto(resposta_binaria, addr)
+
 if __name__ == "__main__":
-    # Obtém a porta atribuída dinamicamente pelo Render
-    port_env = int(os.environ.get("PORT", 8053))
-
-    print("[*] A iniciar serviço DNS Bloqueador compatível com Android 9+...")
+    print(f"[*] A iniciar Servidor DNS NATIVO em {HOST}:{PORT} (UDP)...")
     
-    # Inicia o servidor HTTP/HTTPS
-    rodar_servidor_http(port_env)
+    # Cria o socket UDP para tratar tráfego DNS padrão
+    sock_udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     
+    try:
+        sock_udp.bind((HOST, PORT))
+        print(f"[+] Servidor DNS Ativo e a escutar requisições reais!")
+        escutar_udp(sock_udp)
+    except PermissionError:
+        print(f"[!] ERRO: Para rodar na porta {PORT} localmente precisa de permissões de ROOT (sudo/su).")
+    except Exception as e:
+        print(f"[!] Erro ao iniciar o socket: {e}")
+    finally:
+        sock_udp.close()
+        
